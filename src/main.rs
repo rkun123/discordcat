@@ -31,8 +31,6 @@ async fn main() -> Result<()> {
 
     let setting: Setting = Setting::load_setting()?;
 
-    let username = matches.value_of(USERNAME_FLAG).unwrap_or_default();
-
     let channel = if matches.is_present(CHANNEL_FLAG) {
         matches.value_of(CHANNEL_FLAG).unwrap()
     } else {
@@ -50,11 +48,17 @@ async fn main() -> Result<()> {
         }
     };
 
+    let username = matches.value_of(USERNAME_FLAG).unwrap_or(channel);
+
     if matches.is_present(FILE_FLAG) {
         let filename = matches.value_of(FILENAME_FLAG).unwrap_or_default();
         let filepath = matches.value_of(FILE_FLAG).unwrap();
 
-        send_file(filepath, filename.to_string(), webhook_url).await?;
+        let msg: MsgWithFile = MsgWithFile {
+            username: username.to_string(),
+        };
+
+        send_file(filepath, filename.to_string(), msg, webhook_url).await?;
 
         exit(0)
     }
@@ -120,6 +124,11 @@ struct Setting {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Msg {
     pub content: String,
+    pub username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MsgWithFile {
     pub username: String,
 }
 
@@ -189,7 +198,7 @@ fn configure_discord_webhook() -> Result<()> {
     };
 
     print_msg("nickname for channel:");
-    let channle_name = read_line()?;
+    let channel_name = read_line()?;
 
     print_msg("Please input webhook url:");
     let webhook_url = read_line()?;
@@ -200,10 +209,10 @@ fn configure_discord_webhook() -> Result<()> {
         let mut f = fs::File::create(&get_config_path())?;
 
         let mut channels = HashMap::new();
-        channels.insert(channle_name.to_string(), webhook_url);
+        channels.insert(channel_name.to_string(), webhook_url);
 
         let setting = Setting::new()
-            .set_default_channel(channle_name)
+            .set_default_channel(channel_name)
             .set_channels(channels);
 
         write!(f, "{}", toml::to_string(&setting)?)?;
@@ -218,7 +227,7 @@ fn configure_discord_webhook() -> Result<()> {
         f.read_to_string(&mut s)?;
 
         let setting: Setting = toml::from_str(&s)?;
-        let setting = setting.append_channel(channle_name, webhook_url);
+        let setting = setting.append_channel(channel_name, webhook_url);
 
         f.seek(SeekFrom::Start(0)).unwrap();
         write!(f, "{}", toml::to_string(&setting)?)?;
@@ -235,7 +244,12 @@ fn read_line() -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-async fn send_file(filepath: &str, filename: String, webhook_url: &str) -> Result<()> {
+async fn send_file(
+    filepath: &str,
+    filename: String,
+    msg_with_file: MsgWithFile,
+    webhook_url: &str,
+) -> Result<()> {
     let file = fs::read(&filepath)?;
 
     let filename = if filename.is_empty() {
@@ -244,7 +258,9 @@ async fn send_file(filepath: &str, filename: String, webhook_url: &str) -> Resul
         filename
     };
 
-    let form = Form::new().part("file", Part::bytes(file).file_name(filename));
+    let form = Form::new()
+        .part("file", Part::bytes(file).file_name(filename))
+        .text("payload_json", serde_json::to_string(&msg_with_file)?);
 
     let resp = reqwest::Client::new()
         .post(webhook_url)
